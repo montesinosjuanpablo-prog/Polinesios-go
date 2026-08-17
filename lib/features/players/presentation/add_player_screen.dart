@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
@@ -551,6 +551,7 @@ class _PersonalStep extends StatelessWidget {
               controller.lastNameController.text,
             ),
             photoBytes: controller.photoBytes,
+            photoUrl: controller.photoUrl,
             onPhotoPressed: onPhotoPressed,
             hasSelectedPhoto: controller.hasSelectedPhoto,
           ),
@@ -1335,17 +1336,23 @@ class _PlayerPhotoPlaceholder extends StatelessWidget {
   const _PlayerPhotoPlaceholder({
     required this.initials,
     required this.photoBytes,
+    required this.photoUrl,
     required this.onPhotoPressed,
     required this.hasSelectedPhoto,
   });
 
   final String initials;
   final dynamic photoBytes;
+  final String? photoUrl;
   final VoidCallback onPhotoPressed;
   final bool hasSelectedPhoto;
 
   @override
   Widget build(BuildContext context) {
+    final String existingPhotoUrl = photoUrl?.trim() ?? '';
+    final bool hasExistingPhoto = existingPhotoUrl.isNotEmpty;
+    final bool hasAnyPhoto = hasSelectedPhoto || hasExistingPhoto;
+
     return Center(
       child: Column(
         children: [
@@ -1367,150 +1374,169 @@ class _PlayerPhotoPlaceholder extends StatelessWidget {
                     width: 112,
                     height: 112,
                   )
-                : Center(
-                    child: initials.isEmpty
-                        ? const Icon(
-                            Icons.person_rounded,
-                            size: 58,
-                            color: AppColors.white,
-                          )
-                        : Text(
-                            initials,
-                            style: const TextStyle(
-                              color: AppColors.white,
-                              fontSize: 31,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                  ),
+                : hasExistingPhoto
+                    ? Image.network(
+                        existingPhotoUrl,
+                        fit: BoxFit.cover,
+                        width: 112,
+                        height: 112,
+                        errorBuilder: (context, error, stackTrace) {
+                          return _fallbackContent();
+                        },
+                      )
+                    : _fallbackContent(),
           ),
           const SizedBox(height: 12),
           OutlinedButton.icon(
             onPressed: onPhotoPressed,
             icon: Icon(
-              hasSelectedPhoto
+              hasAnyPhoto
                   ? Icons.edit_rounded
                   : Icons.add_a_photo_outlined,
             ),
             label: Text(
-              hasSelectedPhoto ? 'Cambiar fotografía' : 'Agregar fotografía',
+              hasAnyPhoto ? 'Cambiar fotografía' : 'Agregar fotografía',
             ),
           ),
           const SizedBox(height: 5),
           Text(
             hasSelectedPhoto
-                ? 'Fotografía seleccionada. Se guardará al registrar al jugador.'
-                : 'La fotografía es opcional.',
+                ? 'Fotografía seleccionada. Se guardará al guardar al jugador.'
+                : hasExistingPhoto
+                    ? 'Fotografía actual del jugador.'
+                    : 'La fotografía es opcional.',
             textAlign: TextAlign.center,
-            style: const TextStyle(color: Color(0xFF84777D), fontSize: 12),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DateField extends StatelessWidget {
-  const _DateField({
-    required this.label,
-    required this.value,
-    required this.icon,
-    required this.onPressed,
-  });
-
-  final String label;
-  final DateTime? value;
-  final IconData icon;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(16),
-      child: InputDecorator(
-        decoration: _decoration(
-          label: label,
-          icon: icon,
-          suffixIcon: const Icon(Icons.calendar_month_rounded),
-        ),
-        child: Text(
-          value == null ? 'Seleccionar fecha' : _formatDate(value!),
-          style: TextStyle(
-            color: value == null ? const Color(0xFF8A7D83) : AppColors.black,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
-  }
-
-  String _formatDate(DateTime date) {
-    final String day = date.day.toString().padLeft(2, '0');
-    final String month = date.month.toString().padLeft(2, '0');
-
-    return '$day/$month/${date.year}';
-  }
-}
-
-class _MedicalTextArea extends StatelessWidget {
-  const _MedicalTextArea({
-    required this.controller,
-    required this.label,
-    required this.icon,
-  });
-
-  final TextEditingController controller;
-  final String label;
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    return TextFormField(
-      controller: controller,
-      minLines: 2,
-      maxLines: 4,
-      textCapitalization: TextCapitalization.sentences,
-      decoration: _decoration(label: label, icon: icon),
-    );
-  }
-}
-
-class _InformationMessage extends StatelessWidget {
-  const _InformationMessage({required this.icon, required this.text});
-
-  final IconData icon;
-  final String text;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.fuchsia.withValues(alpha: 0.07),
-        borderRadius: BorderRadius.circular(15),
-        border: Border.all(color: AppColors.fuchsia.withValues(alpha: 0.16)),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, color: AppColors.fuchsia),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                color: Color(0xFF685A61),
-                height: 1.35,
-                fontWeight: FontWeight.w600,
-              ),
+            style: const TextStyle(
+              color: Color(0xFF84777D),
+              fontSize: 12,
             ),
           ),
         ],
       ),
     );
   }
+
+  Widget _fallbackContent() {
+    return Center(
+      child: initials.isEmpty
+          ? const Icon(
+              Icons.person_rounded,
+              size: 58,
+              color: AppColors.white,
+            )
+          : Text(
+              initials,
+              style: const TextStyle(
+                color: AppColors.white,
+                fontSize: 31,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+    );
+  }
 }
+
+class _DateField extends StatelessWidget {
+    const _DateField({
+      required this.label,
+      required this.value,
+      required this.icon,
+      required this.onPressed,
+    });
+
+    final String label;
+    final DateTime? value;
+    final IconData icon;
+    final VoidCallback onPressed;
+
+    @override
+    Widget build(BuildContext context) {
+      return InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(16),
+        child: InputDecorator(
+          decoration: _decoration(
+            label: label,
+            icon: icon,
+            suffixIcon: const Icon(Icons.calendar_month_rounded),
+          ),
+          child: Text(
+            value == null ? 'Seleccionar fecha' : _formatDate(value!),
+            style: TextStyle(
+              color: value == null ? const Color(0xFF8A7D83) : AppColors.black,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ),
+      );
+    }
+
+    String _formatDate(DateTime date) {
+      final String day = date.day.toString().padLeft(2, '0');
+      final String month = date.month.toString().padLeft(2, '0');
+
+      return '$day/$month/${date.year}';
+    }
+  }
+
+  class _MedicalTextArea extends StatelessWidget {
+    const _MedicalTextArea({
+      required this.controller,
+      required this.label,
+      required this.icon,
+    });
+
+    final TextEditingController controller;
+    final String label;
+    final IconData icon;
+
+    @override
+    Widget build(BuildContext context) {
+      return TextFormField(
+        controller: controller,
+        minLines: 2,
+        maxLines: 4,
+        textCapitalization: TextCapitalization.sentences,
+        decoration: _decoration(label: label, icon: icon),
+      );
+    }
+  }
+
+  class _InformationMessage extends StatelessWidget {
+    const _InformationMessage({required this.icon, required this.text});
+
+    final IconData icon;
+    final String text;
+
+    @override
+    Widget build(BuildContext context) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: AppColors.fuchsia.withValues(alpha: 0.07),
+          borderRadius: BorderRadius.circular(15),
+          border: Border.all(color: AppColors.fuchsia.withValues(alpha: 0.16)),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: AppColors.fuchsia),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                text,
+                style: const TextStyle(
+                  color: Color(0xFF685A61),
+                  height: 1.35,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+  }
 
 class _FormControls extends StatelessWidget {
   const _FormControls({

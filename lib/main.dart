@@ -1,4 +1,5 @@
-import 'package:flutter/material.dart';
+ import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'core/config/supabase_config.dart';
@@ -37,6 +38,11 @@ class PolinesiosGoApp extends StatelessWidget {
       title: 'Polinesios GO',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      locale: const Locale('es'),
+      supportedLocales: const <Locale>[
+        Locale('es'),
+      ],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
       home: SupabaseConfig.isConfigured
           ? const WelcomeScreen()
           : const _SupabaseConfigurationScreen(),

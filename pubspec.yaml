@@ -1,5 +1,5 @@
 name: polinesios_go
-description: "A new Flutter project."
+description: "Polinesios GO - Escuela Formativa Polinesios"
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -9,6 +9,9 @@ environment:
 
 dependencies:
   flutter:
+    sdk: flutter
+
+  flutter_localizations:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
@@ -27,3 +30,10 @@ flutter:
 
   assets:
     - assets/images/
+
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/images/logo_polinesios.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/images/logo_polinesios.png"
