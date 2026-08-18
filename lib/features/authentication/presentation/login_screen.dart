@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/constants/app_assets.dart';
@@ -297,6 +297,8 @@ class _LoginScreenState extends State<LoginScreen> {
   void _showAccessInformation() {
     showModalBottomSheet<void>(
       context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
       backgroundColor: Colors.transparent,
       builder: (BuildContext context) {
         return const _AccessInformationSheet();
@@ -832,67 +834,126 @@ class _AccessInformationSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.fromLTRB(24, 14, 24, 32),
-      decoration: const BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+    final double screenHeight = MediaQuery.sizeOf(context).height;
+
+    return ConstrainedBox(
+      constraints: BoxConstraints(
+        maxHeight: screenHeight * 0.88,
       ),
-      child: SafeArea(
-        top: false,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 48,
-              height: 5,
-              decoration: BoxDecoration(
-                color: Colors.black12,
-                borderRadius: BorderRadius.circular(20),
+      child: Container(
+        decoration: const BoxDecoration(
+          color: AppColors.white,
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(28),
+          ),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  24,
+                  14,
+                  24,
+                  0,
+                ),
+                child: Column(
+                  children: [
+                    Container(
+                      width: 48,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: Colors.black12,
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+                    const FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        'Acceso a Polinesios GO',
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: AppColors.black,
+                          fontSize: 23,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                  ],
+                ),
               ),
-            ),
-            const SizedBox(height: 22),
-            const Text(
-              'Acceso a Polinesios GO',
-              style: TextStyle(
-                color: AppColors.black,
-                fontSize: 23,
-                fontWeight: FontWeight.w900,
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(
+                    24,
+                    0,
+                    24,
+                    12,
+                  ),
+                  physics: const BouncingScrollPhysics(),
+                  child: const Column(
+                    children: [
+                      _AccessRole(
+                        icon: Icons.admin_panel_settings_rounded,
+                        title: 'Administrador',
+                        description:
+                            'Gestiona jugadores, pagos, asistencia '
+                            'y toda la escuela.',
+                      ),
+                      _AccessRole(
+                        icon: Icons.sports_rounded,
+                        title: 'Coach',
+                        description:
+                            'Consulta sus grupos, entrenamientos '
+                            'y evaluaciones.',
+                      ),
+                      _AccessRole(
+                        icon: Icons.family_restroom_rounded,
+                        title: 'Padre o tutor',
+                        description:
+                            'Accede únicamente a la información '
+                            'de sus hijos.',
+                      ),
+                    ],
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 18),
-            const _AccessRole(
-              icon: Icons.admin_panel_settings_rounded,
-              title: 'Administrador',
-              description:
-                  'Gestiona jugadores, pagos, asistencia '
-                  'y toda la escuela.',
-            ),
-            const _AccessRole(
-              icon: Icons.sports_rounded,
-              title: 'Coach',
-              description:
-                  'Consulta sus grupos, entrenamientos '
-                  'y evaluaciones.',
-            ),
-            const _AccessRole(
-              icon: Icons.family_restroom_rounded,
-              title: 'Padre o tutor',
-              description:
-                  'Accede únicamente a la información '
-                  'de sus hijos.',
-            ),
-            const SizedBox(height: 18),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton(
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-                child: const Text('ENTENDIDO'),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  24,
+                  6,
+                  24,
+                  18,
+                ),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 50,
+                  child: FilledButton(
+                    onPressed: () {
+                      Navigator.of(context).pop();
+                    },
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.yellow,
+                      foregroundColor: AppColors.black,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
+                    child: const Text(
+                      'ENTENDIDO',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

@@ -4,7 +4,6 @@ import 'package:flutter/services.dart';
 import '../../../core/constants/app_assets.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../attendance/presentation/attendance_screen.dart';
-import '../../payments/models/school_financial_summary.dart';
 import '../../payments/presentation/admin_payments_screen.dart';
 import '../../payments/presentation/school_financial_summary_screen.dart';
 import '../../payments/repositories/payment_repository.dart';
@@ -389,7 +388,7 @@ class _DashboardHomeState extends State<_DashboardHome> {
   List<DashboardBirthday> _upcomingBirthdays = <DashboardBirthday>[];
   List<DashboardAnnouncement> _expiringAnnouncements =
       <DashboardAnnouncement>[];
-  SchoolFinancialSummary? _financialSummary;
+  Map<String, dynamic>? _financialSummary;
 
   @override
   void initState() {
@@ -397,11 +396,11 @@ class _DashboardHomeState extends State<_DashboardHome> {
     _loadDashboard();
   }
 
-  Future<SchoolFinancialSummary?> _loadFinancialSummary() async {
+  Future<Map<String, dynamic>?> _loadFinancialSummary() async {
     final DateTime now = DateTime.now();
 
     try {
-      return await _paymentRepository.getSchoolFinancialSummary(
+      return await _paymentRepository.getSchoolManualFinancialSummary(
         year: now.year,
         month: now.month,
       );
@@ -432,7 +431,7 @@ class _DashboardHomeState extends State<_DashboardHome> {
             limit: 2,
           );
 
-      final Future<SchoolFinancialSummary?> financialFuture =
+      final Future<Map<String, dynamic>?> financialFuture =
           _loadFinancialSummary();
 
       final List<dynamic> results =
@@ -456,8 +455,8 @@ class _DashboardHomeState extends State<_DashboardHome> {
       final List<DashboardAnnouncement> announcements =
           results[3] as List<DashboardAnnouncement>;
 
-      final SchoolFinancialSummary? financialSummary =
-          results[4] as SchoolFinancialSummary?;
+      final Map<String, dynamic>? financialSummary =
+          results[4] as Map<String, dynamic>?;
 
       if (!mounted) {
         return;
@@ -982,7 +981,7 @@ class _PlayerSummaryCard extends StatelessWidget {
 class _FinanceDashboardCard extends StatelessWidget {
   const _FinanceDashboardCard({required this.summary, required this.onView});
 
-  final SchoolFinancialSummary? summary;
+  final Map<String, dynamic>? summary;
   final VoidCallback onView;
 
   String _monthName(int month) {
@@ -1011,10 +1010,19 @@ class _FinanceDashboardCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final DateTime now = DateTime.now();
-    final SchoolFinancialSummary? data = summary;
-    final double progress = data == null
+    final Map<String, dynamic>? data = summary;
+
+    final double totalCollected = data == null
         ? 0
-        : (data.collectionPercentage / 100).clamp(0.0, 1.0);
+        : _dashboardToDouble(data['total_collected']);
+
+    final int paymentCount = data == null
+        ? 0
+        : _dashboardToInt(data['payment_count']);
+
+    final int playersWithPayments = data == null
+        ? 0
+        : _dashboardToInt(data['players_with_payments']);
 
     return Container(
       width: double.infinity,
@@ -1105,62 +1113,40 @@ class _FinanceDashboardCard extends StatelessWidget {
               ),
             )
           else ...[
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  data.collectionPercentageLabel,
-                  style: const TextStyle(
-                    color: AppColors.fuchsia,
-                    fontSize: 31,
-                    height: 1,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                const Padding(
-                  padding: EdgeInsets.only(bottom: 2),
-                  child: Text(
-                    'recaudado',
-                    style: TextStyle(
-                      color: Color(0xFF81747A),
-                      fontSize: 13,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 13),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(20),
-              child: LinearProgressIndicator(
-                value: progress,
-                minHeight: 10,
-                backgroundColor: const Color(0xFFEFE6EA),
-                valueColor: const AlwaysStoppedAnimation<Color>(
-                  AppColors.fuchsia,
-                ),
+            const Text(
+              'Ingresos confirmados',
+              style: TextStyle(
+                color: Color(0xFF81747A),
+                fontSize: 12.5,
+                fontWeight: FontWeight.w700,
               ),
             ),
-            const SizedBox(height: 15),
+            const SizedBox(height: 5),
+            Text(
+              _dashboardFormatMoney(totalCollected),
+              style: const TextStyle(
+                color: AppColors.fuchsia,
+                fontSize: 31,
+                height: 1,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 18),
             Row(
               children: [
                 Expanded(
                   child: _FinanceDashboardMetric(
-                    label: 'Confirmado',
-                    value: data.confirmedAmountLabel,
+                    label: 'Pagos',
+                    value: '$paymentCount',
                     color: const Color(0xFF168A55),
                   ),
                 ),
                 Container(width: 1, height: 38, color: const Color(0xFFE7DDE2)),
                 Expanded(
                   child: _FinanceDashboardMetric(
-                    label: 'Pendiente',
-                    value: data.pendingAmountLabel,
-                    color: data.isFullyCollected
-                        ? const Color(0xFF168A55)
-                        : const Color(0xFFE59A00),
+                    label: 'Jugadores',
+                    value: '$playersWithPayments',
+                    color: AppColors.fuchsia,
                   ),
                 ),
               ],
@@ -1208,6 +1194,34 @@ class _FinanceDashboardMetric extends StatelessWidget {
       ],
     );
   }
+}
+
+double _dashboardToDouble(dynamic value) {
+  if (value is num) {
+    return value.toDouble();
+  }
+
+  return double.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+int _dashboardToInt(dynamic value) {
+  if (value is int) {
+    return value;
+  }
+
+  if (value is num) {
+    return value.toInt();
+  }
+
+  return int.tryParse(value?.toString() ?? '') ?? 0;
+}
+
+String _dashboardFormatMoney(double amount) {
+  final bool hasDecimals = amount != amount.roundToDouble();
+
+  return hasDecimals
+      ? '${amount.toStringAsFixed(2)} Bs'
+      : '${amount.toStringAsFixed(0)} Bs';
 }
 
 class _PolinesiosPulseCard extends StatelessWidget {

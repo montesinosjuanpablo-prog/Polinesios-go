@@ -2,10 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../players/models/player_model.dart';
-import '../models/payment_account_status.dart';
 import '../repositories/payment_repository.dart';
-import 'payment_qr_screen.dart';
-import 'payment_history_screen.dart';
 
 class PaymentAccountScreen extends StatefulWidget {
   const PaymentAccountScreen({required this.player, super.key});
@@ -21,121 +18,208 @@ class PaymentAccountScreen extends StatefulWidget {
 class _PaymentAccountScreenState extends State<PaymentAccountScreen> {
   final PaymentRepository _repository = const PaymentRepository();
 
-  PaymentAccountStatus? _status;
+  final TextEditingController _amountController = TextEditingController();
+  final TextEditingController _notesController = TextEditingController();
 
-  bool _isLoading = true;
-  bool _isRegisteringCash = false;
+  DateTime _paymentDate = DateTime.now();
 
-  String? _errorMessage;
+  String _paymentMethod = 'cash';
+
+  List<Map<String, dynamic>> _history = <Map<String, dynamic>>[];
+
+  bool _isLoadingHistory = true;
+  bool _isSavingPayment = false;
+
+  String? _historyError;
 
   @override
   void initState() {
     super.initState();
-    _loadAccountStatus();
+    _loadHistory();
   }
 
-  void _openPaymentHistory() {
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => PaymentHistoryScreen(player: widget.player),
-      ),
-    );
+  @override
+  void dispose() {
+    _amountController.dispose();
+    _notesController.dispose();
+    super.dispose();
   }
 
-  Future<void> _loadAccountStatus() async {
+  // ============================================================
+  // HISTORIAL
+  // ============================================================
+
+  Future<void> _loadHistory() async {
+    if (!mounted) {
+      return;
+    }
+
     setState(() {
-      _isLoading = true;
-      _errorMessage = null;
+      _isLoadingHistory = true;
+      _historyError = null;
     });
 
     try {
-      final PaymentAccountStatus result = await _repository.getCurrentFee(
-        widget.player.id,
-      );
+      final List<Map<String, dynamic>> result = await _repository
+          .getPlayerManualPaymentHistory(widget.player.id);
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _status = result;
-        _isLoading = false;
+        _history = result;
+        _isLoadingHistory = false;
       });
     } catch (error) {
+      debugPrint('Error al cargar historial simple de pagos: $error');
+
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _isLoading = false;
-        _errorMessage =
-            'No fue posible obtener el estado de cuenta del jugador.';
+        _history = <Map<String, dynamic>>[];
+        _isLoadingHistory = false;
+        _historyError = 'No fue posible cargar el historial de pagos.';
       });
     }
   }
 
-  void _openPaymentQr() {
-    final PaymentAccountStatus? status = _status;
+  // ============================================================
+  // FECHA
+  // ============================================================
 
-    if (status == null) {
-      _showMessage('Todavía estamos cargando los datos del pago.');
+  Future<void> _selectPaymentDate() async {
+    if (_isSavingPayment) {
       return;
     }
 
-    if (status.isPaid) {
-      _showMessage(
-        'La mensualidad de ${status.displayPeriod} ya se encuentra pagada.',
-      );
-      return;
-    }
+    final DateTime today = DateTime.now();
 
-    Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(
-        builder: (_) => PaymentQrScreen(
-          playerId: status.playerId,
-          playerName: status.playerName,
-          categoryName: status.categoryName,
-          amount: status.displayRemainingAmount,
-        ),
-      ),
+    final DateTime normalizedToday = DateTime(
+      today.year,
+      today.month,
+      today.day,
     );
+
+    final DateTime firstAllowedDate = DateTime(today.year, 1, 1);
+
+    final DateTime? selectedDate = await showDatePicker(
+      context: context,
+      initialDate: _paymentDate,
+      firstDate: firstAllowedDate,
+      lastDate: normalizedToday,
+      helpText: 'Fecha del pago',
+      cancelText: 'CANCELAR',
+      confirmText: 'SELECCIONAR',
+    );
+
+    if (selectedDate == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _paymentDate = selectedDate;
+    });
   }
 
-  Future<void> _openCashPaymentDialog() async {
-    final PaymentAccountStatus? status = _status;
+  // ============================================================
+  // MÉTODO
+  // ============================================================
 
-    if (status == null || _isRegisteringCash) {
+  void _cyclePaymentMethod() {
+    if (_isSavingPayment) {
       return;
     }
 
-    if (status.isPaid) {
-      _showMessage(
-        'La mensualidad de ${status.displayPeriod} ya se encuentra pagada.',
+    setState(() {
+      _paymentMethod = _paymentMethod == 'cash' ? 'qr' : 'cash';
+    });
+  }
+
+  // ============================================================
+  // REGISTRAR PAGO
+  // ============================================================
+
+  Future<void> _registerPayment() async {
+    if (_isSavingPayment) {
+      return;
+    }
+
+    FocusScope.of(context).unfocus();
+
+    final String amountText = _amountController.text.trim().replaceAll(
+      ',',
+      '.',
+    );
+
+    final double? amount = double.tryParse(amountText);
+
+    if (amount == null || amount <= 0) {
+      _showMessage('Ingresa un monto válido mayor a cero.', isError: true);
+      return;
+    }
+
+    final bool confirmed = await _showRegisterConfirmation(amount: amount);
+
+    if (!confirmed || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _isSavingPayment = true;
+    });
+
+    try {
+      await _repository.registerManualPayment(
+        playerId: widget.player.id,
+        amount: amount,
+        paymentDate: _paymentDate,
+        paymentMethod: _paymentMethod,
+        notes: _notesController.text,
       );
-      return;
-    }
 
-    final _CashPaymentRequest? request = await showDialog<_CashPaymentRequest>(
+      if (!mounted) {
+        return;
+      }
+
+      _amountController.clear();
+      _notesController.clear();
+
+      setState(() {
+        _paymentDate = DateTime.now();
+        _paymentMethod = 'cash';
+      });
+
+      await _loadHistory();
+
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage('¡Pago registrado correctamente!');
+    } catch (error) {
+      debugPrint('Error al registrar pago manual: $error');
+
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(_friendlyPaymentError(error), isError: true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingPayment = false;
+        });
+      }
+    }
+  }
+
+  Future<bool> _showRegisterConfirmation({required double amount}) async {
+    final bool? result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return _CashPaymentDialog(status: status);
-      },
-    );
-
-    if (request == null || !mounted) {
-      return;
-    }
-
-    await _confirmAndRegisterCashPayment(status: status, request: request);
-  }
-
-  Future<void> _confirmAndRegisterCashPayment({
-    required PaymentAccountStatus status,
-    required _CashPaymentRequest request,
-  }) async {
-    final bool? confirmed = await showDialog<bool>(
-      context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           shape: RoundedRectangleBorder(
@@ -157,43 +241,40 @@ class _PaymentAccountScreenState extends State<PaymentAccountScreen> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Text(
-                'Estás por registrar un pago en efectivo.',
-                style: TextStyle(
-                  color: Color(0xFF756970),
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 18),
-              _ConfirmationRow(label: 'Jugador', value: status.playerName),
-              const SizedBox(height: 9),
-              _ConfirmationRow(label: 'Período', value: status.displayPeriod),
-              const SizedBox(height: 9),
+              _ConfirmationRow(label: 'Jugador', value: widget.player.fullName),
+              const SizedBox(height: 10),
               _ConfirmationRow(
-                label: 'Monto',
-                value: _formatMoney(request.amount),
+                label: 'Fecha',
+                value: _formatDate(_paymentDate),
               ),
-              const SizedBox(height: 9),
-              const _ConfirmationRow(label: 'Método', value: 'Efectivo'),
-              if (request.notes != null) ...[
-                const SizedBox(height: 9),
-                _ConfirmationRow(label: 'Observación', value: request.notes!),
+              const SizedBox(height: 10),
+              _ConfirmationRow(label: 'Monto', value: _formatMoney(amount)),
+              const SizedBox(height: 10),
+              _ConfirmationRow(
+                label: 'Método',
+                value: _methodLabel(_paymentMethod),
+              ),
+              if (_notesController.text.trim().isNotEmpty) ...[
+                const SizedBox(height: 10),
+                _ConfirmationRow(
+                  label: 'Observación',
+                  value: _notesController.text.trim(),
+                ),
               ],
               const SizedBox(height: 18),
               Container(
-                padding: const EdgeInsets.all(12),
+                width: double.infinity,
+                padding: const EdgeInsets.all(13),
                 decoration: BoxDecoration(
-                  color: AppColors.yellow.withValues(alpha: 0.18),
+                  color: AppColors.yellow.withValues(alpha: 0.20),
                   borderRadius: BorderRadius.circular(14),
                 ),
                 child: const Text(
-                  'El pago quedará confirmado inmediatamente '
-                  'por el administrador.',
+                  'El pago quedará acreditado inmediatamente.',
                   style: TextStyle(
                     color: Color(0xFF6D5600),
-                    fontSize: 12.5,
-                    height: 1.4,
                     fontWeight: FontWeight.w700,
+                    height: 1.35,
                   ),
                 ),
               ),
@@ -228,27 +309,69 @@ class _PaymentAccountScreenState extends State<PaymentAccountScreen> {
       },
     );
 
-    if (confirmed != true || !mounted) {
+    return result ?? false;
+  }
+
+  // ============================================================
+  // CORREGIR PAGO
+  // ============================================================
+
+  Future<void> _openCorrectionDialog(Map<String, dynamic> payment) async {
+    final String paymentId =
+        payment['payment_record_id']?.toString().trim() ?? '';
+
+    if (paymentId.isEmpty) {
+      _showMessage(
+        'El pago seleccionado no tiene un identificador válido.',
+        isError: true,
+      );
       return;
     }
 
-    await _registerCashPayment(request);
-  }
+    final double amount = _toDouble(payment['amount']);
 
-  Future<void> _registerCashPayment(_CashPaymentRequest request) async {
-    if (_isRegisteringCash) {
+    final DateTime paymentDate =
+        _parseDate(payment['payment_date']) ?? DateTime.now();
+
+    final String method =
+        payment['payment_method']?.toString().trim().toLowerCase() ?? 'cash';
+
+    final String notes = payment['notes']?.toString().trim() ?? '';
+
+    final _PaymentCorrectionRequest? request =
+        await showDialog<_PaymentCorrectionRequest>(
+          context: context,
+          barrierDismissible: false,
+          builder: (BuildContext dialogContext) {
+            return _CorrectionDialog(
+              initialAmount: amount,
+              initialDate: paymentDate,
+              initialMethod: method == 'qr' ? 'qr' : 'cash',
+              initialNotes: notes,
+            );
+          },
+        );
+
+    if (request == null || !mounted) {
+      return;
+    }
+
+    final bool confirmed = await _showCorrectionConfirmation(request);
+
+    if (!confirmed || !mounted) {
       return;
     }
 
     setState(() {
-      _isRegisteringCash = true;
+      _isSavingPayment = true;
     });
 
     try {
-      final Map<String, dynamic> result = await _repository.registerCashPayment(
-        playerId: widget.player.id,
+      await _repository.updateManualPayment(
+        paymentRecordId: paymentId,
         amount: request.amount,
-        paymentDate: DateTime.now(),
+        paymentDate: request.paymentDate,
+        paymentMethod: request.paymentMethod,
         notes: request.notes,
       );
 
@@ -256,71 +379,132 @@ class _PaymentAccountScreenState extends State<PaymentAccountScreen> {
         return;
       }
 
-      final double remainingAmount = _toDouble(result['remaining_amount']);
-
-      final String chargeStatus =
-          result['charge_status']?.toString().trim() ?? '';
-
-      await _loadAccountStatus();
+      await _loadHistory();
 
       if (!mounted) {
         return;
       }
 
-      if (chargeStatus == 'paid' || remainingAmount <= 0) {
-        _showSuccessMessage(
-          '¡Pago registrado! '
-          'La mensualidad quedó completamente pagada.',
-        );
-      } else {
-        _showSuccessMessage(
-          'Pago registrado correctamente. '
-          'Saldo pendiente: ${_formatMoney(remainingAmount)}.',
-        );
-      }
+      _showMessage('Pago corregido correctamente.');
     } catch (error) {
+      debugPrint('Error al corregir pago: $error');
+
       if (!mounted) {
         return;
       }
 
-      _showErrorMessage(_cashPaymentErrorMessage(error));
+      _showMessage(_friendlyPaymentError(error), isError: true);
     } finally {
       if (mounted) {
         setState(() {
-          _isRegisteringCash = false;
+          _isSavingPayment = false;
         });
       }
     }
   }
 
-  void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: AppColors.fuchsia,
-          content: Text(
-            message,
-            style: const TextStyle(
-              color: AppColors.white,
-              fontWeight: FontWeight.w800,
+  Future<bool> _showCorrectionConfirmation(
+    _PaymentCorrectionRequest request,
+  ) async {
+    final bool? result = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
+          title: const Row(
+            children: [
+              Icon(Icons.edit_note_rounded, color: AppColors.fuchsia),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'Confirmar corrección',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Se actualizará el mismo registro de pago.',
+                style: TextStyle(
+                  color: Color(0xFF756970),
+                  fontWeight: FontWeight.w600,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 18),
+              _ConfirmationRow(
+                label: 'Fecha',
+                value: _formatDate(request.paymentDate),
+              ),
+              const SizedBox(height: 9),
+              _ConfirmationRow(
+                label: 'Monto',
+                value: _formatMoney(request.amount),
+              ),
+              const SizedBox(height: 9),
+              _ConfirmationRow(
+                label: 'Método',
+                value: _methodLabel(request.paymentMethod),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(false);
+              },
+              child: const Text(
+                'CANCELAR',
+                style: TextStyle(fontWeight: FontWeight.w800),
+              ),
             ),
-          ),
-        ),
-      );
+            FilledButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop(true);
+              },
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.fuchsia,
+                foregroundColor: AppColors.white,
+              ),
+              child: const Text(
+                'GUARDAR CORRECCIÓN',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    return result ?? false;
   }
 
-  void _showSuccessMessage(String message) {
+  // ============================================================
+  // MENSAJES
+  // ============================================================
+
+  void _showMessage(String message, {bool isError = false}) {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFF168A55),
+          backgroundColor: isError
+              ? Colors.red.shade700
+              : const Color(0xFF168A55),
           content: Row(
             children: [
-              const Icon(Icons.check_circle_rounded, color: AppColors.white),
+              Icon(
+                isError ? Icons.error_rounded : Icons.check_circle_rounded,
+                color: AppColors.white,
+              ),
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
@@ -337,31 +521,42 @@ class _PaymentAccountScreenState extends State<PaymentAccountScreen> {
       );
   }
 
-  void _showErrorMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          backgroundColor: const Color(0xFFC62828),
-          content: Row(
-            children: [
-              const Icon(Icons.error_rounded, color: AppColors.white),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  message,
-                  style: const TextStyle(
-                    color: AppColors.white,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
+  String _friendlyPaymentError(Object error) {
+    final String message = error.toString();
+
+    const List<String> knownMessages = <String>[
+      'Debes iniciar sesión',
+      'Solo un administrador',
+      'El monto del pago',
+      'La fecha del pago',
+      'El método de pago',
+      'El jugador seleccionado no existe',
+      'No tienes autorización',
+      'No existe el pago confirmado',
+      'Tu usuario no está activo',
+    ];
+
+    for (final String knownMessage in knownMessages) {
+      if (message.contains(knownMessage)) {
+        final int start = message.indexOf(knownMessage);
+        String clean = message.substring(start);
+
+        final int marker = clean.indexOf(',');
+
+        if (marker > 0) {
+          clean = clean.substring(0, marker);
+        }
+
+        return clean.trim();
+      }
+    }
+
+    return 'No fue posible completar la operación.';
   }
+
+  // ============================================================
+  // BUILD
+  // ============================================================
 
   @override
   Widget build(BuildContext context) {
@@ -370,35 +565,34 @@ class _PaymentAccountScreenState extends State<PaymentAccountScreen> {
       appBar: AppBar(
         backgroundColor: AppColors.darkFuchsia,
         foregroundColor: AppColors.white,
-        elevation: 0,
         title: const Text(
-          'Estado de cuenta',
+          'Pagos',
           style: TextStyle(fontWeight: FontWeight.w900),
         ),
         actions: [
           IconButton(
-            onPressed: _isLoading || _isRegisteringCash
-                ? null
-                : _loadAccountStatus,
             tooltip: 'Actualizar',
+            onPressed: _isLoadingHistory || _isSavingPayment
+                ? null
+                : _loadHistory,
             icon: const Icon(Icons.refresh_rounded),
           ),
+          const SizedBox(width: 4),
         ],
       ),
       body: SafeArea(
         child: RefreshIndicator(
           color: AppColors.fuchsia,
-          onRefresh: _loadAccountStatus,
+          onRefresh: _loadHistory,
           child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: const EdgeInsets.fromLTRB(18, 18, 18, 34),
             children: [
-              Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 850),
-                  child: _buildContent(),
-                ),
-              ),
+              _PlayerPaymentHeader(player: widget.player),
+              const SizedBox(height: 18),
+              _buildPaymentForm(),
+              const SizedBox(height: 22),
+              _buildHistorySection(),
             ],
           ),
         ),
@@ -406,91 +600,302 @@ class _PaymentAccountScreenState extends State<PaymentAccountScreen> {
     );
   }
 
-  Widget _buildContent() {
-    if (_isLoading) {
-      return const SizedBox(
-        height: 420,
-        child: Center(
-          child: CircularProgressIndicator(color: AppColors.fuchsia),
-        ),
-      );
-    }
-
-    if (_errorMessage != null) {
-      return _PaymentErrorCard(
-        message: _errorMessage!,
-        onRetry: _loadAccountStatus,
-      );
-    }
-
-    final PaymentAccountStatus status = _status!;
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        _PlayerHeaderCard(player: widget.player, status: status),
-        const SizedBox(height: 18),
-
-        _CurrentPaymentCard(status: status),
-        const SizedBox(height: 18),
-
-        _FinancialSummaryCard(status: status),
-        const SizedBox(height: 18),
-
-        _PaymentDetailsCard(status: status),
-        const SizedBox(height: 18),
-
-        _QrActionCard(
-          isEnabled: !status.isPaid && !_isRegisteringCash,
-          onPressed: _openPaymentQr,
-        ),
-        const SizedBox(height: 18),
-
-        _CashActionCard(
-          status: status,
-          isLoading: _isRegisteringCash,
-          onPressed: _openCashPaymentDialog,
-        ),
-        const SizedBox(height: 18),
-
-        _HistoryActionCard(onPressed: _openPaymentHistory),
-        const SizedBox(height: 22),
-
-        SizedBox(
-          height: 54,
-          child: OutlinedButton.icon(
-            onPressed: _isRegisteringCash
-                ? null
-                : () {
-                    Navigator.of(context).pop();
-                  },
-            icon: const Icon(Icons.arrow_back_rounded),
-            label: const Text(
-              'VOLVER A LA FICHA',
-              style: TextStyle(fontWeight: FontWeight.w900),
+  Widget _buildPaymentForm() {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: AppColors.fuchsia.withValues(alpha: 0.14)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Row(
+            children: [
+              Icon(Icons.add_card_rounded, color: AppColors.fuchsia),
+              SizedBox(width: 9),
+              Expanded(
+                child: Text(
+                  'Registrar pago',
+                  style: TextStyle(
+                    color: AppColors.black,
+                    fontSize: 19,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Registra únicamente el dinero que ya fue recibido.',
+            style: TextStyle(
+              color: Color(0xFF81747A),
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
             ),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: AppColors.fuchsia,
-              side: const BorderSide(color: AppColors.fuchsia),
+          ),
+          const SizedBox(height: 20),
+
+          // FECHA
+          InkWell(
+            onTap: _selectPaymentDate,
+            borderRadius: BorderRadius.circular(16),
+            child: InputDecorator(
+              decoration: InputDecoration(
+                labelText: 'Fecha del pago',
+                prefixIcon: const Icon(Icons.calendar_month_rounded),
+                suffixIcon: const Icon(Icons.expand_more_rounded),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: BorderSide(
+                    color: AppColors.fuchsia.withValues(alpha: 0.25),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(16),
+                  borderSide: const BorderSide(
+                    color: AppColors.fuchsia,
+                    width: 1.6,
+                  ),
+                ),
+              ),
+              child: Text(
+                _formatDateLong(_paymentDate),
+                style: const TextStyle(
+                  color: AppColors.black,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // MONTO
+          TextField(
+            controller: _amountController,
+            enabled: !_isSavingPayment,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: InputDecoration(
+              labelText: 'Monto',
+              hintText: 'Ej.: 120',
+              prefixIcon: const Icon(Icons.payments_outlined),
+              suffixText: 'Bs',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(
+                  color: AppColors.fuchsia.withValues(alpha: 0.25),
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: const BorderSide(
+                  color: AppColors.fuchsia,
+                  width: 1.6,
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // MÉTODO
+          const Text(
+            'Método de pago',
+            style: TextStyle(
+              color: Color(0xFF756970),
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+
+          _PaymentMethodButton(
+            method: _paymentMethod,
+            onTap: _cyclePaymentMethod,
+          ),
+
+          const SizedBox(height: 7),
+
+          const Text(
+            'Toca el botón para cambiar entre Efectivo y QR.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFF91858B),
+              fontSize: 11.5,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // OBSERVACIÓN
+          TextField(
+            controller: _notesController,
+            enabled: !_isSavingPayment,
+            minLines: 2,
+            maxLines: 4,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              labelText: 'Observación (opcional)',
+              hintText: 'Convenio, detalle u otra referencia',
+              prefixIcon: const Icon(Icons.notes_rounded),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: BorderSide(
+                  color: AppColors.fuchsia.withValues(alpha: 0.25),
+                ),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(16),
+                borderSide: const BorderSide(
+                  color: AppColors.fuchsia,
+                  width: 1.6,
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          FilledButton.icon(
+            onPressed: _isSavingPayment ? null : _registerPayment,
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.fuchsia,
+              foregroundColor: AppColors.white,
+              minimumSize: const Size(double.infinity, 54),
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(17),
               ),
             ),
+            icon: _isSavingPayment
+                ? const SizedBox(
+                    width: 21,
+                    height: 21,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.5,
+                      color: AppColors.white,
+                    ),
+                  )
+                : const Icon(Icons.check_circle_rounded),
+            label: Text(
+              _isSavingPayment ? 'REGISTRANDO...' : 'CONFIRMAR PAGO',
+              style: const TextStyle(fontWeight: FontWeight.w900),
+            ),
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHistorySection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Historial de pagos',
+                style: TextStyle(
+                  color: AppColors.black,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            if (!_isLoadingHistory)
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 11,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.fuchsia.withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${_history.length}',
+                  style: const TextStyle(
+                    color: AppColors.fuchsia,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+          ],
         ),
+        const SizedBox(height: 12),
+        if (_isLoadingHistory)
+          const _HistoryLoadingCard()
+        else if (_historyError != null)
+          _HistoryErrorCard(message: _historyError!, onRetry: _loadHistory)
+        else if (_history.isEmpty)
+          const _EmptyHistoryCard()
+        else
+          ..._history.map((Map<String, dynamic> payment) {
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 11),
+              child: _PaymentHistoryCard(
+                payment: payment,
+                onCorrect: _isSavingPayment
+                    ? null
+                    : () {
+                        _openCorrectionDialog(payment);
+                      },
+              ),
+            );
+          }),
       ],
     );
   }
 }
 
-class _PlayerHeaderCard extends StatelessWidget {
-  const _PlayerHeaderCard({required this.player, required this.status});
+// ============================================================
+// ENCABEZADO DEL JUGADOR
+// ============================================================
+
+class _PlayerPaymentHeader extends StatelessWidget {
+  const _PlayerPaymentHeader({required this.player});
 
   final PlayerModel player;
-  final PaymentAccountStatus status;
 
   @override
   Widget build(BuildContext context) {
+    final String photoUrl = player.photoUrl?.trim() ?? '';
+
+    Widget initialsFallback() {
+      return Container(
+        color: AppColors.yellow,
+        alignment: Alignment.center,
+        child: Text(
+          player.initials,
+          style: const TextStyle(
+            color: AppColors.black,
+            fontSize: 22,
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -499,56 +904,81 @@ class _PlayerHeaderCard extends StatelessWidget {
           end: Alignment.bottomRight,
           colors: [AppColors.darkFuchsia, AppColors.fuchsia],
         ),
-        borderRadius: BorderRadius.circular(24),
+        borderRadius: BorderRadius.circular(25),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.fuchsia.withValues(alpha: 0.22),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Row(
         children: [
           Container(
             width: 68,
             height: 68,
+            padding: const EdgeInsets.all(3),
             decoration: BoxDecoration(
               color: AppColors.yellow,
-              shape: BoxShape.circle,
-              border: Border.all(color: AppColors.white, width: 3),
+              borderRadius: BorderRadius.circular(21),
             ),
-            alignment: Alignment.center,
-            child: Text(
-              player.initials.isEmpty ? '?' : player.initials,
-              style: const TextStyle(
-                color: AppColors.black,
-                fontSize: 22,
-                fontWeight: FontWeight.w900,
-              ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: photoUrl.isNotEmpty
+                  ? Image.network(
+                      photoUrl,
+                      width: double.infinity,
+                      height: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder:
+                          (
+                            BuildContext context,
+                            Object error,
+                            StackTrace? stackTrace,
+                          ) {
+                            return initialsFallback();
+                          },
+                    )
+                  : initialsFallback(),
             ),
           ),
-          const SizedBox(width: 15),
+          const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  status.playerName,
+                  player.fullName,
                   style: const TextStyle(
                     color: AppColors.white,
                     fontSize: 20,
                     fontWeight: FontWeight.w900,
                   ),
                 ),
-                const SizedBox(height: 6),
+                const SizedBox(height: 5),
                 Text(
-                  'Código: ${player.playerCode}',
+                  player.playerCode,
                   style: const TextStyle(
                     color: Colors.white70,
+                    fontSize: 12.5,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
-                const SizedBox(height: 6),
-                Text(
-                  status.categoryName,
-                  style: const TextStyle(
-                    color: AppColors.yellow,
-                    fontWeight: FontWeight.w800,
-                  ),
+                const SizedBox(height: 7),
+                Wrap(
+                  spacing: 7,
+                  runSpacing: 7,
+                  children: [
+                    _HeaderChip(
+                      icon: Icons.sports_soccer_rounded,
+                      label: player.displayCategory,
+                    ),
+                    _HeaderChip(
+                      icon: Icons.groups_rounded,
+                      label: player.displayTrainingGroup,
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -559,383 +989,31 @@ class _PlayerHeaderCard extends StatelessWidget {
   }
 }
 
-class _CurrentPaymentCard extends StatelessWidget {
-  const _CurrentPaymentCard({required this.status});
-
-  final PaymentAccountStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    final bool paid = status.isPaid;
-
-    final Color principalColor = paid
-        ? const Color(0xFF168A55)
-        : AppColors.fuchsia;
-
-    return Container(
-      padding: const EdgeInsets.all(23),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: principalColor.withValues(alpha: 0.20)),
-      ),
-      child: Column(
-        children: [
-          Icon(
-            paid
-                ? Icons.verified_rounded
-                : Icons.account_balance_wallet_rounded,
-            color: principalColor,
-            size: 42,
-          ),
-          const SizedBox(height: 12),
-
-          Text(
-            paid ? 'Mensualidad pagada' : 'Saldo pendiente',
-            style: const TextStyle(
-              color: Color(0xFF756970),
-              fontSize: 13,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 7),
-
-          Text(
-            status.displayRemainingAmount,
-            style: TextStyle(
-              color: principalColor,
-              fontSize: 39,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 8),
-
-          Text(
-            status.displayPeriod,
-            style: const TextStyle(
-              color: AppColors.black,
-              fontSize: 16,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          const SizedBox(height: 13),
-
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-            decoration: BoxDecoration(
-              color: paid
-                  ? const Color(0xFF168A55).withValues(alpha: 0.12)
-                  : AppColors.yellow.withValues(alpha: 0.22),
-              borderRadius: BorderRadius.circular(18),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  paid ? Icons.check_circle_rounded : Icons.schedule_rounded,
-                  color: paid
-                      ? const Color(0xFF168A55)
-                      : const Color(0xFF745700),
-                  size: 18,
-                ),
-                const SizedBox(width: 6),
-                Text(
-                  paid ? 'PAGADO' : status.chargeStatusLabel.toUpperCase(),
-                  style: TextStyle(
-                    color: paid
-                        ? const Color(0xFF168A55)
-                        : const Color(0xFF745700),
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FinancialSummaryCard extends StatelessWidget {
-  const _FinancialSummaryCard({required this.status});
-
-  final PaymentAccountStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Row(
-            children: [
-              Icon(
-                Icons.receipt_long_rounded,
-                color: AppColors.fuchsia,
-                size: 28,
-              ),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Resumen de la mensualidad',
-                  style: TextStyle(
-                    color: AppColors.black,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 18),
-
-          _FinancialRow(label: 'Monto total', value: status.displayAmountDue),
-          const Divider(height: 24),
-
-          _FinancialRow(
-            label: 'Monto pagado',
-            value: status.displayAmountPaid,
-            valueColor: const Color(0xFF168A55),
-          ),
-          const Divider(height: 24),
-
-          _FinancialRow(
-            label: 'Saldo pendiente',
-            value: status.displayRemainingAmount,
-            valueColor: status.isPaid
-                ? const Color(0xFF168A55)
-                : AppColors.fuchsia,
-            emphasize: true,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FinancialRow extends StatelessWidget {
-  const _FinancialRow({
-    required this.label,
-    required this.value,
-    this.valueColor,
-    this.emphasize = false,
-  });
-
-  final String label;
-  final String value;
-  final Color? valueColor;
-  final bool emphasize;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Expanded(
-          child: Text(
-            label,
-            style: TextStyle(
-              color: const Color(0xFF756970),
-              fontSize: emphasize ? 14 : 13,
-              fontWeight: emphasize ? FontWeight.w900 : FontWeight.w700,
-            ),
-          ),
-        ),
-        const SizedBox(width: 12),
-        Text(
-          value,
-          style: TextStyle(
-            color: valueColor ?? AppColors.black,
-            fontSize: emphasize ? 18 : 15,
-            fontWeight: FontWeight.w900,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _PaymentDetailsCard extends StatelessWidget {
-  const _PaymentDetailsCard({required this.status});
-
-  final PaymentAccountStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(22),
-      ),
-      child: Column(
-        children: [
-          _DetailRow(
-            icon: Icons.calendar_month_rounded,
-            label: 'Período',
-            value: status.displayPeriod,
-          ),
-          const Divider(height: 28),
-
-          _DetailRow(
-            icon: Icons.date_range_rounded,
-            label: 'Ventana de pago',
-            value: 'Del día ${status.dayFrom} al ${status.dayTo}',
-          ),
-          const Divider(height: 28),
-
-          _DetailRow(
-            icon: Icons.event_rounded,
-            label: 'Fecha límite',
-            value: status.displayDueDate,
-          ),
-          const Divider(height: 28),
-
-          _DetailRow(
-            icon: Icons.groups_rounded,
-            label: 'Categoría',
-            value: status.categoryName,
-          ),
-          const Divider(height: 28),
-
-          _DetailRow(
-            icon: status.isPaid
-                ? Icons.verified_rounded
-                : Icons.pending_actions_rounded,
-            label: 'Estado',
-            value: status.chargeStatusLabel,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DetailRow extends StatelessWidget {
-  const _DetailRow({
-    required this.icon,
-    required this.label,
-    required this.value,
-  });
+class _HeaderChip extends StatelessWidget {
+  const _HeaderChip({required this.icon, required this.label});
 
   final IconData icon;
   final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: AppColors.fuchsia.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Icon(icon, color: AppColors.fuchsia),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                label,
-                style: const TextStyle(
-                  color: Color(0xFF81747A),
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                value,
-                style: const TextStyle(
-                  color: AppColors.black,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _QrActionCard extends StatelessWidget {
-  const _QrActionCard({required this.isEnabled, required this.onPressed});
-
-  final bool isEnabled;
-  final VoidCallback onPressed;
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 6),
       decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white.withValues(alpha: 0.14),
+        borderRadius: BorderRadius.circular(20),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          const Row(
-            children: [
-              Icon(Icons.qr_code_2_rounded, color: AppColors.fuchsia, size: 35),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Pago mediante QR',
-                      style: TextStyle(
-                        color: AppColors.black,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Consulta el QR institucional '
-                      'para realizar el pago.',
-                      style: TextStyle(
-                        color: Color(0xFF81747A),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 17),
-          SizedBox(
-            height: 50,
-            child: FilledButton.icon(
-              onPressed: isEnabled ? onPressed : null,
-              icon: const Icon(Icons.qr_code_scanner_rounded),
-              label: Text(
-                isEnabled ? 'VER QR' : 'MENSUALIDAD PAGADA',
-                style: const TextStyle(fontWeight: FontWeight.w900),
-              ),
-              style: FilledButton.styleFrom(
-                backgroundColor: AppColors.yellow,
-                foregroundColor: AppColors.black,
-                disabledBackgroundColor: const Color(0xFFE4E4E4),
-                disabledForegroundColor: const Color(0xFF777777),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
+          Icon(icon, size: 14, color: AppColors.yellow),
+          const SizedBox(width: 5),
+          Text(
+            label,
+            style: const TextStyle(
+              color: AppColors.white,
+              fontSize: 11.5,
+              fontWeight: FontWeight.w800,
             ),
           ),
         ],
@@ -944,46 +1022,113 @@ class _QrActionCard extends StatelessWidget {
   }
 }
 
-class _CashActionCard extends StatelessWidget {
-  const _CashActionCard({
-    required this.status,
-    required this.isLoading,
-    required this.onPressed,
-  });
+// ============================================================
+// BOTÓN QR / EFECTIVO
+// ============================================================
 
-  final PaymentAccountStatus status;
-  final bool isLoading;
-  final VoidCallback onPressed;
+class _PaymentMethodButton extends StatelessWidget {
+  const _PaymentMethodButton({required this.method, required this.onTap});
+
+  final String method;
+  final VoidCallback onTap;
+
+  bool get _isCash {
+    return method == 'cash';
+  }
 
   @override
   Widget build(BuildContext context) {
-    final bool enabled = !status.isPaid && !isLoading;
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.white,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: const Color(0xFF168A55).withValues(alpha: 0.18),
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Ink(
+        height: 58,
+        decoration: BoxDecoration(
+          color: _isCash
+              ? AppColors.yellow.withValues(alpha: 0.35)
+              : AppColors.fuchsia.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: _isCash ? AppColors.yellow : AppColors.fuchsia,
+            width: 1.7,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _isCash ? Icons.payments_rounded : Icons.qr_code_2_rounded,
+              color: _isCash ? AppColors.black : AppColors.fuchsia,
+              size: 27,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              _isCash ? 'EFECTIVO' : 'QR',
+              style: TextStyle(
+                color: _isCash ? AppColors.black : AppColors.fuchsia,
+                fontSize: 16,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Icon(
+              Icons.sync_rounded,
+              color: _isCash ? AppColors.black : AppColors.fuchsia,
+              size: 19,
+            ),
+          ],
         ),
       ),
+    );
+  }
+}
+
+// ============================================================
+// HISTORIAL
+// ============================================================
+
+class _PaymentHistoryCard extends StatelessWidget {
+  const _PaymentHistoryCard({required this.payment, required this.onCorrect});
+
+  final Map<String, dynamic> payment;
+  final VoidCallback? onCorrect;
+
+  @override
+  Widget build(BuildContext context) {
+    final double amount = _toDouble(payment['amount']);
+
+    final DateTime? date = _parseDate(payment['payment_date']);
+
+    final String method =
+        payment['payment_method']?.toString().trim().toLowerCase() ?? '';
+
+    final String notes = payment['notes']?.toString().trim() ?? '';
+
+    return Container(
+      padding: const EdgeInsets.all(17),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.fuchsia.withValues(alpha: 0.13)),
+      ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
             children: [
               Container(
-                width: 48,
-                height: 48,
+                width: 50,
+                height: 50,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF168A55).withValues(alpha: 0.11),
-                  borderRadius: BorderRadius.circular(15),
+                  color: method == 'qr'
+                      ? AppColors.fuchsia.withValues(alpha: 0.10)
+                      : AppColors.yellow.withValues(alpha: 0.28),
+                  borderRadius: BorderRadius.circular(16),
                 ),
-                child: const Icon(
-                  Icons.payments_rounded,
-                  color: Color(0xFF168A55),
-                  size: 28,
+                child: Icon(
+                  method == 'qr'
+                      ? Icons.qr_code_2_rounded
+                      : Icons.payments_rounded,
+                  color: method == 'qr' ? AppColors.fuchsia : AppColors.black,
                 ),
               ),
               const SizedBox(width: 12),
@@ -991,59 +1136,94 @@ class _CashActionCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Pago en efectivo',
-                      style: TextStyle(
+                    Text(
+                      _formatMoney(amount),
+                      style: const TextStyle(
                         color: AppColors.black,
-                        fontSize: 17,
+                        fontSize: 19,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3),
                     Text(
-                      status.isPaid
-                          ? 'La mensualidad ya fue cubierta.'
-                          : 'Registro y aprobación manual '
-                                'por administración.',
+                      date == null ? 'Fecha no registrada' : _formatDate(date),
                       style: const TextStyle(
                         color: Color(0xFF81747A),
-                        fontWeight: FontWeight.w600,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _methodLabel(method),
+                      style: const TextStyle(
+                        color: AppColors.fuchsia,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w900,
                       ),
                     ),
                   ],
                 ),
               ),
+              IconButton(
+                tooltip: 'Corregir pago',
+                onPressed: onCorrect,
+                icon: const Icon(Icons.edit_rounded, color: AppColors.fuchsia),
+              ),
             ],
           ),
-          const SizedBox(height: 17),
-          SizedBox(
-            height: 50,
-            child: FilledButton.icon(
-              onPressed: enabled ? onPressed : null,
-              icon: isLoading
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2.4),
-                    )
-                  : const Icon(Icons.add_card_rounded),
-              label: Text(
-                isLoading
-                    ? 'REGISTRANDO...'
-                    : status.isPaid
-                    ? 'PAGO COMPLETADO'
-                    : 'REGISTRAR PAGO EN EFECTIVO',
-                style: const TextStyle(fontWeight: FontWeight.w900),
+          if (notes.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(11),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF8F3F5),
+                borderRadius: BorderRadius.circular(13),
               ),
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFF168A55),
-                foregroundColor: AppColors.white,
-                disabledBackgroundColor: const Color(0xFFE4E4E4),
-                disabledForegroundColor: const Color(0xFF777777),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+              child: Text(
+                notes,
+                style: const TextStyle(
+                  color: Color(0xFF756970),
+                  fontSize: 12.5,
+                  height: 1.35,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyHistoryCard extends StatelessWidget {
+  const _EmptyHistoryCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(28),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: const Column(
+        children: [
+          Icon(Icons.receipt_long_rounded, size: 52, color: AppColors.fuchsia),
+          SizedBox(height: 12),
+          Text(
+            'Todavía no hay pagos registrados',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+          ),
+          SizedBox(height: 6),
+          Text(
+            'Los pagos que acredites aparecerán aquí.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              color: Color(0xFF81747A),
+              fontWeight: FontWeight.w600,
             ),
           ),
         ],
@@ -1052,10 +1232,29 @@ class _CashActionCard extends StatelessWidget {
   }
 }
 
-class _HistoryActionCard extends StatelessWidget {
-  const _HistoryActionCard({required this.onPressed});
+class _HistoryLoadingCard extends StatelessWidget {
+  const _HistoryLoadingCard();
 
-  final VoidCallback onPressed;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(32),
+      decoration: BoxDecoration(
+        color: AppColors.white,
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: const Center(
+        child: CircularProgressIndicator(color: AppColors.fuchsia),
+      ),
+    );
+  }
+}
+
+class _HistoryErrorCard extends StatelessWidget {
+  const _HistoryErrorCard({required this.message, required this.onRetry});
+
+  final String message;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -1064,71 +1263,21 @@ class _HistoryActionCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: AppColors.white,
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.fuchsia.withValues(alpha: 0.16)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
-            children: [
-              Container(
-                width: 48,
-                height: 48,
-                decoration: BoxDecoration(
-                  color: AppColors.fuchsia.withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: const Icon(
-                  Icons.history_rounded,
-                  color: AppColors.fuchsia,
-                  size: 29,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Historial de pagos',
-                      style: TextStyle(
-                        color: AppColors.black,
-                        fontSize: 17,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Consulta todos los movimientos '
-                      'registrados del jugador.',
-                      style: TextStyle(
-                        color: Color(0xFF81747A),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+          const Icon(Icons.error_outline_rounded, color: Colors.red, size: 45),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontWeight: FontWeight.w700),
           ),
-          const SizedBox(height: 17),
-          SizedBox(
-            height: 50,
-            child: OutlinedButton.icon(
-              onPressed: onPressed,
-              icon: const Icon(Icons.receipt_long_rounded),
-              label: const Text(
-                'VER HISTORIAL DE PAGOS',
-                style: TextStyle(fontWeight: FontWeight.w900),
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: AppColors.fuchsia,
-                side: const BorderSide(color: AppColors.fuchsia),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-              ),
-            ),
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('REINTENTAR'),
           ),
         ],
       ),
@@ -1136,207 +1285,402 @@ class _HistoryActionCard extends StatelessWidget {
   }
 }
 
-class _CashPaymentDialog extends StatefulWidget {
-  const _CashPaymentDialog({required this.status});
+// ============================================================
+// DIÁLOGO DE CORRECCIÓN
+// ============================================================
 
-  final PaymentAccountStatus status;
+class _CorrectionDialog extends StatefulWidget {
+  const _CorrectionDialog({
+    required this.initialAmount,
+    required this.initialDate,
+    required this.initialMethod,
+    required this.initialNotes,
+  });
+
+  final double initialAmount;
+  final DateTime initialDate;
+  final String initialMethod;
+  final String initialNotes;
 
   @override
-  State<_CashPaymentDialog> createState() {
-    return _CashPaymentDialogState();
+  State<_CorrectionDialog> createState() {
+    return _CorrectionDialogState();
   }
 }
 
-class _CashPaymentDialogState extends State<_CashPaymentDialog> {
+class _CorrectionDialogState extends State<_CorrectionDialog> {
   late final TextEditingController _amountController;
   late final TextEditingController _notesController;
 
-  String? _validationMessage;
+  late DateTime _paymentDate;
+  late String _paymentMethod;
 
   @override
   void initState() {
     super.initState();
 
     _amountController = TextEditingController(
-      text: _editableAmount(widget.status.remainingAmount),
+      text: _amountForEditing(widget.initialAmount),
     );
 
-    _notesController = TextEditingController();
+    _notesController = TextEditingController(text: widget.initialNotes);
+
+    _paymentDate = widget.initialDate;
+    _paymentMethod = widget.initialMethod;
   }
 
   @override
   void dispose() {
     _amountController.dispose();
     _notesController.dispose();
-
     super.dispose();
   }
 
+  Future<void> _selectDate() async {
+    final DateTime today = DateTime.now();
+
+    final DateTime? selectedDate = await showDatePicker(
+      context: context,
+      initialDate: _paymentDate,
+      firstDate: DateTime(today.year, 1, 1),
+      lastDate: DateTime(today.year, today.month, today.day),
+      helpText: 'Corregir fecha del pago',
+      cancelText: 'CANCELAR',
+      confirmText: 'SELECCIONAR',
+    );
+
+    if (selectedDate == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _paymentDate = selectedDate;
+    });
+  }
+
+  void _cycleMethod() {
+    setState(() {
+      _paymentMethod = _paymentMethod == 'cash' ? 'qr' : 'cash';
+    });
+  }
+
   void _submit() {
-    final String normalizedAmount = _amountController.text.trim().replaceAll(
+    final String amountText = _amountController.text.trim().replaceAll(
       ',',
       '.',
     );
 
-    final double? amount = double.tryParse(normalizedAmount);
+    final double? amount = double.tryParse(amountText);
 
     if (amount == null || amount <= 0) {
-      setState(() {
-        _validationMessage = 'Ingresa un monto válido mayor a cero.';
-      });
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          const SnackBar(
+            content: Text('Ingresa un monto válido mayor a cero.'),
+          ),
+        );
+
       return;
     }
-
-    if (amount > widget.status.remainingAmount) {
-      setState(() {
-        _validationMessage =
-            'El monto no puede superar el saldo '
-            'pendiente de '
-            '${widget.status.displayRemainingAmount}.';
-      });
-      return;
-    }
-
-    final String notes = _notesController.text.trim();
 
     Navigator.of(context).pop(
-      _CashPaymentRequest(amount: amount, notes: notes.isEmpty ? null : notes),
+      _PaymentCorrectionRequest(
+        amount: amount,
+        paymentDate: _paymentDate,
+        paymentMethod: _paymentMethod,
+        notes: _notesController.text.trim(),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+      contentPadding: const EdgeInsets.fromLTRB(22, 8, 22, 22),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-      title: const Row(
-        children: [
-          Icon(Icons.payments_rounded, color: Color(0xFF168A55)),
-          SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              'Pago en efectivo',
-              style: TextStyle(fontWeight: FontWeight.w900),
-            ),
-          ),
-        ],
+      title: const Text(
+        'Corregir pago',
+        style: TextStyle(fontWeight: FontWeight.w900),
       ),
       content: SingleChildScrollView(
+        keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              widget.status.playerName,
-              style: const TextStyle(
-                color: AppColors.black,
-                fontSize: 17,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${widget.status.displayPeriod} · '
-              'Saldo '
-              '${widget.status.displayRemainingAmount}',
-              style: const TextStyle(
-                color: Color(0xFF81747A),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 20),
-
             TextField(
               controller: _amountController,
               keyboardType: const TextInputType.numberWithOptions(
                 decimal: true,
               ),
-              decoration: InputDecoration(
-                labelText: 'Monto recibido',
+              decoration: const InputDecoration(
+                labelText: 'Monto',
                 suffixText: 'Bs',
-                prefixIcon: const Icon(Icons.payments_outlined),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
+                prefixIcon: Icon(Icons.payments_outlined),
+              ),
+            ),
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: _selectDate,
+              borderRadius: BorderRadius.circular(12),
+              child: InputDecorator(
+                decoration: const InputDecoration(
+                  labelText: 'Fecha',
+                  prefixIcon: Icon(Icons.calendar_month_rounded),
+                ),
+                child: Text(
+                  _formatDate(_paymentDate),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
                 ),
               ),
             ),
-
-            const SizedBox(height: 14),
-
+            const SizedBox(height: 12),
+            const Text(
+              'Método de pago',
+              style: TextStyle(
+                color: Color(0xFF756970),
+                fontSize: 12,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 7),
+            _CompactPaymentMethodButton(
+              method: _paymentMethod,
+              onTap: _cycleMethod,
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _notesController,
               minLines: 2,
-              maxLines: 4,
+              maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
               decoration: InputDecoration(
-                labelText: 'Observación opcional',
-                hintText: 'Ej.: Pago recibido en secretaría',
+                labelText: 'Observación (opcional)',
+                hintText: 'Detalle o motivo de la corrección',
                 prefixIcon: const Icon(Icons.notes_rounded),
+                filled: true,
+                fillColor: AppColors.yellow.withValues(alpha: 0.12),
                 border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide(
+                    color: AppColors.yellow.withValues(alpha: 0.85),
+                  ),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(
+                    color: AppColors.fuchsia,
+                    width: 1.6,
+                  ),
                 ),
               ),
             ),
-
-            if (_validationMessage != null) ...[
-              const SizedBox(height: 12),
-              Text(
-                _validationMessage!,
-                style: const TextStyle(
-                  color: Color(0xFFC62828),
-                  fontSize: 12.5,
-                  fontWeight: FontWeight.w700,
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 54,
+                    child: OutlinedButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                      },
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: AppColors.fuchsia,
+                        side: const BorderSide(
+                          color: AppColors.fuchsia,
+                          width: 1.6,
+                        ),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text(
+                          'CANCELAR',
+                          maxLines: 1,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-            ],
-
-            const SizedBox(height: 14),
-
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF168A55).withValues(alpha: 0.08),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Text(
-                'Puedes registrar el monto completo '
-                'o un pago parcial. El saldo restante '
-                'se actualizará automáticamente.',
-                style: TextStyle(
-                  color: Color(0xFF37634F),
-                  fontSize: 12.5,
-                  height: 1.4,
-                  fontWeight: FontWeight.w700,
+                const SizedBox(width: 10),
+                Expanded(
+                  child: SizedBox(
+                    height: 54,
+                    child: FilledButton(
+                      onPressed: _submit,
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.fuchsia,
+                        foregroundColor: AppColors.white,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 5,
+                        ),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                      ),
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              'GUARDAR',
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                height: 1,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          FittedBox(
+                            fit: BoxFit.scaleDown,
+                            child: Text(
+                              'CAMBIOS',
+                              maxLines: 1,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                height: 1,
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-              ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.info_outline_rounded,
+                  size: 17,
+                  color: AppColors.fuchsia,
+                ),
+                SizedBox(width: 7),
+                Flexible(
+                  child: Text(
+                    'Se actualizará el mismo registro de pago.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Color(0xFF756970),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            Navigator.of(context).pop();
-          },
-          child: const Text(
-            'CANCELAR',
-            style: TextStyle(fontWeight: FontWeight.w800),
-          ),
-        ),
-        FilledButton.icon(
-          onPressed: _submit,
-          icon: const Icon(Icons.arrow_forward_rounded),
-          label: const Text(
-            'CONTINUAR',
-            style: TextStyle(fontWeight: FontWeight.w900),
-          ),
-          style: FilledButton.styleFrom(
-            backgroundColor: const Color(0xFF168A55),
-            foregroundColor: AppColors.white,
-          ),
-        ),
-      ],
     );
   }
 }
+
+class _CompactPaymentMethodButton extends StatelessWidget {
+  const _CompactPaymentMethodButton({
+    required this.method,
+    required this.onTap,
+  });
+
+  final String method;
+  final VoidCallback onTap;
+
+  bool get _isCash {
+    return method == 'cash';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(14),
+      child: Ink(
+        height: 46,
+        padding: const EdgeInsets.symmetric(horizontal: 14),
+        decoration: BoxDecoration(
+          color: _isCash
+              ? AppColors.yellow.withValues(alpha: 0.18)
+              : AppColors.fuchsia.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: _isCash ? AppColors.yellow : AppColors.fuchsia,
+            width: 1.4,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _isCash ? Icons.payments_rounded : Icons.qr_code_2_rounded,
+              color: _isCash ? AppColors.black : AppColors.fuchsia,
+              size: 21,
+            ),
+            const SizedBox(width: 8),
+            Flexible(
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  _isCash ? 'EFECTIVO' : 'QR',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: _isCash ? AppColors.black : AppColors.fuchsia,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 7),
+            Icon(
+              Icons.sync_rounded,
+              color: _isCash ? AppColors.black : AppColors.fuchsia,
+              size: 17,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaymentCorrectionRequest {
+  const _PaymentCorrectionRequest({
+    required this.amount,
+    required this.paymentDate,
+    required this.paymentMethod,
+    required this.notes,
+  });
+
+  final double amount;
+  final DateTime paymentDate;
+  final String paymentMethod;
+  final String notes;
+}
+
+// ============================================================
+// CONFIRMACIÓN
+// ============================================================
 
 class _ConfirmationRow extends StatelessWidget {
   const _ConfirmationRow({required this.label, required this.value});
@@ -1355,15 +1699,16 @@ class _ConfirmationRow extends StatelessWidget {
             label,
             style: const TextStyle(
               color: Color(0xFF81747A),
+              fontSize: 12.5,
               fontWeight: FontWeight.w700,
             ),
           ),
         ),
-        const SizedBox(width: 10),
+        const SizedBox(width: 8),
         Expanded(
           child: Text(
             value,
-            textAlign: TextAlign.end,
+            textAlign: TextAlign.right,
             style: const TextStyle(
               color: AppColors.black,
               fontWeight: FontWeight.w900,
@@ -1375,108 +1720,71 @@ class _ConfirmationRow extends StatelessWidget {
   }
 }
 
-class _PaymentErrorCard extends StatelessWidget {
-  const _PaymentErrorCard({required this.message, required this.onRetry});
+// ============================================================
+// HELPERS
+// ============================================================
 
-  final String message;
-  final VoidCallback onRetry;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.red.withValues(alpha: 0.08),
-        borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: Colors.red.withValues(alpha: 0.25)),
-      ),
-      child: Column(
-        children: [
-          const Icon(Icons.warning_amber_rounded, color: Colors.red, size: 34),
-          const SizedBox(height: 10),
-          Text(
-            message,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF8A2525),
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 12),
-          TextButton(onPressed: onRetry, child: const Text('REINTENTAR')),
-        ],
-      ),
-    );
-  }
-}
-
-class _CashPaymentRequest {
-  const _CashPaymentRequest({required this.amount, this.notes});
-
-  final double amount;
-  final String? notes;
-}
-
-String _editableAmount(double value) {
-  if (value == value.roundToDouble()) {
-    return value.toInt().toString();
+DateTime? _parseDate(dynamic value) {
+  if (value == null) {
+    return null;
   }
 
-  return value.toStringAsFixed(2);
-}
-
-String _formatMoney(double value) {
-  if (value == value.roundToDouble()) {
-    return '${value.toInt()} Bs';
+  if (value is DateTime) {
+    return value;
   }
 
-  return '${value.toStringAsFixed(2)} Bs';
+  return DateTime.tryParse(value.toString());
 }
 
 double _toDouble(dynamic value) {
-  if (value == null) {
-    return 0;
-  }
-
   if (value is num) {
     return value.toDouble();
   }
 
-  return double.tryParse(value.toString()) ?? 0;
+  return double.tryParse(value?.toString() ?? '') ?? 0;
 }
 
-String _cashPaymentErrorMessage(Object error) {
-  final String message = error.toString();
+String _formatDate(DateTime date) {
+  final String day = date.day.toString().padLeft(2, '0');
 
-  final String lower = message.toLowerCase();
+  final String month = date.month.toString().padLeft(2, '0');
 
-  if (lower.contains('solo un administrador')) {
-    return 'Solo un administrador puede '
-        'registrar pagos en efectivo.';
-  }
+  return '$day/$month/${date.year}';
+}
 
-  if (lower.contains('no está activo')) {
-    return 'Tu usuario no está activo para '
-        'registrar pagos.';
-  }
+String _formatDateLong(DateTime date) {
+  const List<String> months = <String>[
+    'enero',
+    'febrero',
+    'marzo',
+    'abril',
+    'mayo',
+    'junio',
+    'julio',
+    'agosto',
+    'septiembre',
+    'octubre',
+    'noviembre',
+    'diciembre',
+  ];
 
-  if (lower.contains('ya se encuentra pagada')) {
-    return 'Esta mensualidad ya se encuentra pagada.';
-  }
+  return '${date.day} de ${months[date.month - 1]} de ${date.year}';
+}
 
-  if (lower.contains('supera el saldo pendiente')) {
-    return 'El monto ingresado supera el saldo pendiente.';
-  }
+String _formatMoney(double amount) {
+  final bool hasDecimals = amount != amount.roundToDouble();
 
-  if (lower.contains('no existe una tarifa vigente')) {
-    return 'No existe una tarifa vigente para '
-        'este jugador.';
-  }
+  return hasDecimals
+      ? '${amount.toStringAsFixed(2)} Bs'
+      : '${amount.toStringAsFixed(0)} Bs';
+}
 
-  if (lower.contains('no tienes autorización')) {
-    return 'No tienes autorización para registrar '
-        'este pago.';
-  }
+String _amountForEditing(double amount) {
+  final bool hasDecimals = amount != amount.roundToDouble();
 
-  return 'No fue posible registrar el pago en efectivo.';
+  return hasDecimals ? amount.toStringAsFixed(2) : amount.toStringAsFixed(0);
+}
+
+String _methodLabel(String method) {
+  return method.toLowerCase() == 'qr' ? 'QR' : 'Efectivo';
 }

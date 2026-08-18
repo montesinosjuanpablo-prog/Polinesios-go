@@ -7,6 +7,138 @@ import '../models/monthly_collection_player.dart';
 class PaymentRepository {
   const PaymentRepository();
 
+  // ============================================================
+  // NUEVO SISTEMA SIMPLE DE PAGOS
+  // ============================================================
+
+  /// Registra manualmente un pago confirmado.
+  ///
+  /// El administrador define:
+  /// - jugador;
+  /// - monto;
+  /// - fecha;
+  /// - método: QR o efectivo;
+  /// - observación opcional.
+  Future<Map<String, dynamic>> registerManualPayment({
+    required String playerId,
+    required double amount,
+    required DateTime paymentDate,
+    required String paymentMethod,
+    String? notes,
+  }) async {
+    final String normalizedPlayerId = playerId.trim();
+
+    if (normalizedPlayerId.isEmpty) {
+      throw const FormatException(
+        'El identificador del jugador es obligatorio.',
+      );
+    }
+
+    if (amount <= 0) {
+      throw const FormatException('El monto del pago debe ser mayor a cero.');
+    }
+
+    final String normalizedMethod = paymentMethod.trim().toLowerCase();
+
+    if (normalizedMethod != 'qr' && normalizedMethod != 'cash') {
+      throw const FormatException('El método de pago debe ser QR o efectivo.');
+    }
+
+    return PaymentService.registerManualPayment(
+      playerId: normalizedPlayerId,
+      amount: amount,
+      paymentDate: paymentDate,
+      paymentMethod: normalizedMethod,
+      notes: notes,
+    );
+  }
+
+  /// Corrige un pago manual ya registrado.
+  ///
+  /// Se mantiene el mismo identificador del movimiento.
+  Future<Map<String, dynamic>> updateManualPayment({
+    required String paymentRecordId,
+    required double amount,
+    required DateTime paymentDate,
+    required String paymentMethod,
+    String? notes,
+  }) async {
+    final String normalizedPaymentId = paymentRecordId.trim();
+
+    if (normalizedPaymentId.isEmpty) {
+      throw const FormatException('El identificador del pago es obligatorio.');
+    }
+
+    if (amount <= 0) {
+      throw const FormatException('El monto del pago debe ser mayor a cero.');
+    }
+
+    final String normalizedMethod = paymentMethod.trim().toLowerCase();
+
+    if (normalizedMethod != 'qr' && normalizedMethod != 'cash') {
+      throw const FormatException('El método de pago debe ser QR o efectivo.');
+    }
+
+    return PaymentService.updateManualPayment(
+      paymentRecordId: normalizedPaymentId,
+      amount: amount,
+      paymentDate: paymentDate,
+      paymentMethod: normalizedMethod,
+      notes: notes,
+    );
+  }
+
+  /// Obtiene únicamente los pagos confirmados de un jugador.
+  Future<List<Map<String, dynamic>>> getPlayerManualPaymentHistory(
+    String playerId,
+  ) async {
+    final String normalizedPlayerId = playerId.trim();
+
+    if (normalizedPlayerId.isEmpty) {
+      throw const FormatException(
+        'El identificador del jugador es obligatorio.',
+      );
+    }
+
+    return PaymentService.getPlayerManualPaymentHistory(
+      playerId: normalizedPlayerId,
+    );
+  }
+
+  /// Obtiene todos los pagos confirmados de la escuela.
+  Future<List<Map<String, dynamic>>> getSchoolManualPayments() async {
+    return PaymentService.getSchoolManualPayments();
+  }
+
+  /// Obtiene el resumen financiero real del período.
+  ///
+  /// No calcula deuda, monto esperado ni mora.
+  /// Solo utiliza pagos confirmados.
+  Future<Map<String, dynamic>> getSchoolManualFinancialSummary({
+    required int year,
+    required int month,
+  }) async {
+    if (year < 2000 || year > 2100) {
+      throw const FormatException('El año indicado no es válido.');
+    }
+
+    if (month < 1 || month > 12) {
+      throw const FormatException('El mes debe estar entre 1 y 12.');
+    }
+
+    return PaymentService.getSchoolManualFinancialSummary(
+      year: year,
+      month: month,
+    );
+  }
+
+  // ============================================================
+  // SISTEMA ANTERIOR
+  //
+  // Se mantiene TEMPORALMENTE para que las pantallas antiguas
+  // continúen compilando mientras realizamos la migración.
+  // ============================================================
+
   Future<PaymentAccountStatus> getCurrentFee(String playerId) async {
     final String normalizedPlayerId = playerId.trim();
 
@@ -22,7 +154,7 @@ class PaymentRepository {
     return PaymentAccountStatus.fromMap(response);
   }
 
-  /// Obtiene el historial completo de pagos de un jugador.
+  /// Historial completo del sistema anterior.
   Future<List<PaymentHistoryItem>> getPlayerPaymentHistory(
     String playerId,
   ) async {
@@ -44,8 +176,7 @@ class PaymentRepository {
         .toList();
   }
 
-  /// Obtiene el resumen financiero general de la escuela
-  /// para un período determinado.
+  /// Resumen financiero del sistema anterior.
   Future<SchoolFinancialSummary> getSchoolFinancialSummary({
     required int year,
     required int month,
@@ -67,15 +198,7 @@ class PaymentRepository {
     return SchoolFinancialSummary.fromMap(response);
   }
 
-  /// Obtiene el detalle mensual de cobranza de la escuela.
-  ///
-  /// Devuelve un registro consolidado por jugador con:
-  /// - monto esperado;
-  /// - monto pagado;
-  /// - saldo pendiente;
-  /// - estado de cobranza;
-  /// - pagos confirmados por QR;
-  /// - pagos confirmados en efectivo.
+  /// Detalle mensual del sistema anterior.
   Future<List<MonthlyCollectionPlayer>> getSchoolMonthlyCollectionDetail({
     required int year,
     required int month,
@@ -101,6 +224,7 @@ class PaymentRepository {
         .toList();
   }
 
+  /// Pago en efectivo del sistema anterior.
   Future<Map<String, dynamic>> registerCashPayment({
     required String playerId,
     required double amount,
@@ -127,6 +251,7 @@ class PaymentRepository {
     );
   }
 
+  /// Reporte QR del sistema anterior.
   Future<Map<String, dynamic>> reportQrPayment({
     required String playerId,
     required double amount,
@@ -162,16 +287,12 @@ class PaymentRepository {
     );
   }
 
-  /// Obtiene todos los pagos realizados mediante QR
-  /// para la revisión administrativa.
+  /// Bandeja QR administrativa del sistema anterior.
   Future<List<Map<String, dynamic>>> getQrPaymentsForAdmin() async {
     return PaymentService.getQrPaymentsForAdmin();
   }
 
-  /// Confirma un pago QR pendiente.
-  ///
-  /// Supabase actualizará además el monto pagado
-  /// y el estado de la mensualidad.
+  /// Confirmación QR del sistema anterior.
   Future<Map<String, dynamic>> confirmQrPayment({
     required String paymentRecordId,
     String? notes,
@@ -188,9 +309,7 @@ class PaymentRepository {
     );
   }
 
-  /// Rechaza un pago QR pendiente.
-  ///
-  /// El rechazo no modifica el saldo de la mensualidad.
+  /// Rechazo QR del sistema anterior.
   Future<Map<String, dynamic>> rejectQrPayment({
     required String paymentRecordId,
     String? notes,
